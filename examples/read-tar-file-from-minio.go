@@ -16,7 +16,7 @@ func main() {
 	minfs.Logger = log.StandardLogger()
 	log.SetReportCaller(true)
 
-	fs, err := minfs.NewMinFS("registry:9000", "minioadmin", "minioadmin", false, "package")
+	fs, err := minfs.NewMinFS("minio-server-address:9000", "minioadmin", "minioadmin", false, "package")
 	if err != nil {
 		panic(err)
 	}
