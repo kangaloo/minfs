@@ -1,6 +1,8 @@
 package minfs
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -57,6 +59,7 @@ func (fs *FS) Open(name string) (File, error) {
 	return &MinFile{obj: obj}, nil
 }
 
+// Create 创建可写的文件，同名对象会被覆盖
 func (fs *FS) Create(name string) (*MinFile, error) {
 	if !strings.HasPrefix(name, "/") || strings.Contains(name, `\`) {
 		return nil, errors.New(fmt.Sprintf("invalid file name: %s", name))
@@ -70,28 +73,32 @@ func (fs *FS) Create(name string) (*MinFile, error) {
 	go func() {
 		Logger.Println("[MINFS] upload start")
 		defer func() {
-			Logger.Println("[MINFS] upload done")
 			wg.Done()
+			Logger.Println("[MINFS] upload process completed")
 		}()
 
 		defer func() {
-			Logger.Println("[MINFS] close reader")
 			if err := reader.Close(); err != nil {
-				Logger.Println("[MINFS] " + err.Error())
+				Logger.Println("[MINFS] reader close failed " + err.Error())
 			}
-			Logger.Println("[MINFS] close reader end")
+			Logger.Println("[MINFS] reader closed successfully")
 		}()
 
 		opts := minio.PutObjectOptions{}
 		opts.PartSize = 1024 * 1024 * 1024 * 5
 		stat, err := fs.client.PutObject(context.Background(), fs.bucket, name, reader, -1, opts)
 		if err != nil {
-			Logger.Println("[MINFS] upload error")
-			Logger.Println("[MINFS] " + err.Error())
+			Logger.Println("[MINFS] upload error " + err.Error())
 			return
 		}
-		Logger.Println("[MINFS] upload end")
-		Logger.Printf("[MINFS] bucket: %s, key: %s, size: %d, lastModified: %s, location: %s\n", stat.Bucket, stat.Key, stat.Size, stat.LastModified.String(), stat.Location)
+		Logger.Printf(
+			"[MINFS] upload completed, bucket: %s, key: %s, size: %d, lastModified: %s, location: %s\n",
+			stat.Bucket,
+			stat.Key,
+			stat.Size,
+			stat.LastModified.String(),
+			stat.Location,
+		)
 	}()
 
 	return &MinFile{
@@ -100,4 +107,89 @@ func (fs *FS) Create(name string) (*MinFile, error) {
 		uploadWriter: writer,
 		uploadName:   name,
 	}, nil
+}
+
+// OpenTar
+func (fs *FS) OpenTar(path string) (io.ReadCloser, error) {
+
+	if !strings.HasSuffix(path, "/") || strings.Contains(path, `\`) {
+		return nil, errors.New(fmt.Sprintf("invalid path: %s", path))
+	}
+
+	opts := minio.ListObjectsOptions{}
+	opts.Prefix = path
+	opts.Recursive = true
+	infoCh := fs.client.ListObjects(context.Background(), fs.bucket, opts)
+
+	var files []*TarFile
+	for info := range infoCh {
+		info := info
+		name := strings.TrimPrefix(info.Key, path)
+		name = strings.TrimPrefix(name, "/")
+		file := &TarFile{}
+		file.Key = info.Key
+		file.Name = name
+		files = append(files, file)
+	}
+
+	pipeReader, pipeWriter := io.Pipe()
+	compressWriter := gzip.NewWriter(pipeWriter)
+	tarWriter := tar.NewWriter(compressWriter)
+
+	go func() {
+		defer func() {
+			if err := tarWriter.Close(); err != nil {
+				Logger.Println("[MINFS] " + err.Error())
+			}
+			if err := compressWriter.Close(); err != nil {
+				Logger.Println("[MINFS] " + err.Error())
+			}
+			if err := pipeWriter.Close(); err != nil {
+				Logger.Println("[MINFS] " + err.Error())
+			}
+		}()
+
+		for _, file := range files {
+			obj, err := fs.client.GetObject(context.Background(), fs.bucket, file.Key, minio.GetObjectOptions{})
+			if err != nil {
+				Logger.Println("[MINFS] " + err.Error())
+				return
+			}
+
+			info, err := obj.Stat()
+			if err != nil {
+				Logger.Println("[MINFS] " + err.Error())
+				return
+			}
+
+			h := &tar.Header{}
+			h.Name = file.Name
+			h.Size = info.Size
+			h.ModTime = info.LastModified
+			h.Mode = 0644
+
+			if err := tarWriter.WriteHeader(h); err != nil {
+				Logger.Println("[MINFS] " + err.Error())
+				return
+			}
+
+			_, err = io.Copy(tarWriter, obj)
+			if err != nil {
+				Logger.Println("[MINFS] " + err.Error())
+				return
+			}
+
+			if err := obj.Close(); err != nil {
+				Logger.Println("[MINFS] " + err.Error())
+				return
+			}
+		}
+	}()
+
+	return pipeReader, nil
+}
+
+type TarFile struct {
+	Name string // 用于压缩文件的 header
+	Key  string // 用于从 minio 读取数据
 }

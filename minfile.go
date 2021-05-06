@@ -38,8 +38,8 @@ func (mf *MinFile) Read(b []byte) (int, error) {
 }
 
 func (mf *MinFile) Close() error {
-	Logger.Println("[MINFS] closing file start")
-	defer func() { Logger.Println("[MINFS] closing file end") }()
+	Logger.Println("[MINFS] closing file")
+	defer func() { Logger.Printf("[MINFS] file closed, name: %s", mf.uploadName) }()
 
 	if mf.uploadWriter != nil {
 		Logger.Println("[MINFS] find upload writer, will close it")
@@ -47,7 +47,7 @@ func (mf *MinFile) Close() error {
 
 		if err != nil {
 			// uploadWriter.Close 返回错误，尝试执行 uploadReader.Close 使上传任务出错
-			Logger.Println("[MINFS] upload writer close error: " + err.Error())
+			Logger.Println("[MINFS] close upload writer error: " + err.Error())
 			Logger.Println("[MINFS] try to close upload reader")
 
 			rErr := mf.uploadReader.Close()
@@ -59,9 +59,9 @@ func (mf *MinFile) Close() error {
 			return err
 		}
 
-		Logger.Println("[MINFS] upload writer closed, wait for reader closing")
+		Logger.Println("[MINFS] upload writer closed, wait for the upload process to complete")
 		mf.wg.Wait()
-		Logger.Println("[MINFS] reader closed")
+		Logger.Println("[MINFS] upload process completed")
 	}
 
 	// 使用 fs.Open 打开的只读文件
