@@ -52,7 +52,7 @@ func (mf *MinFile) Close() error {
 
 			rErr := mf.uploadReader.Close()
 			if rErr != nil {
-				Logger.Println("[MINFS] close upload reader error: " + err.Error())
+				Logger.Println("[MINFS] close upload reader error: " + rErr.Error())
 			}
 
 			mf.wg.Wait()
